@@ -25,19 +25,14 @@ app.get("/", (req, res) => {
 });
 
 // =============================
-// ROTA CHAT (COHERE)
+// ROTA CHAT BÁSICO (MANTIDA)
 // =============================
 app.post("/api/chat", async (req, res) => {
     const { message } = req.body;
-
-    if (!message) {
-        return res.status(400).json({ error: "Mensagem não fornecida." });
-    }
+    if (!message) return res.status(400).json({ error: "Mensagem não fornecida." });
 
     try {
-        if (!COHERE_API_KEY) {
-            return res.status(500).json({ error: "Chave da Cohere não configurada no servidor Vercel." });
-        }
+        if (!COHERE_API_KEY) return res.status(500).json({ error: "Chave da Cohere não configurada." });
 
         const cohereResponse = await fetch("https://api.cohere.ai/v1/chat", {
             method: "POST",
@@ -49,27 +44,66 @@ app.post("/api/chat", async (req, res) => {
             body: JSON.stringify({ message })
         });
 
-        if (!cohereResponse.ok) {
-            const errorData = await cohereResponse.text();
-            console.error("Erro na API da Cohere:", errorData);
-            return res.status(500).json({ error: "Falha ao comunicar com a inteligência artificial." });
-        }
-
+        if (!cohereResponse.ok) throw new Error("Falha na API da Cohere");
         const data = await cohereResponse.json();
         res.json({ reply: data.text });
         
     } catch (err) {
-        console.error("Erro interno:", err);
         res.status(500).json({ error: "Falha no servidor." });
     }
 });
 
+// =========================================================
+// NOVO: ROTA AVANÇADA PARA O IDE (EDIÇÃO CIRÚRGICA E PROJETO)
+// =========================================================
+app.post("/api/ide-chat", async (req, res) => {
+    const { message, systemInstruction, history } = req.body;
+
+    if (!message) return res.status(400).json({ error: "Instrução não fornecida." });
+
+    try {
+        if (!COHERE_API_KEY) return res.status(500).json({ error: "Chave da Cohere não configurada no servidor Vercel." });
+
+        // Cohere usa 'preamble' para as instruções de sistema e um histórico específico
+        const coherePayload = {
+            message: message,
+            preamble: systemInstruction || "Você é um assistente de IA.",
+            chat_history: history || [],
+            temperature: 0.1 // Temperatura baixa para programação precisa e sem erros
+        };
+
+        const cohereResponse = await fetch("https://api.cohere.ai/v1/chat", {
+            method: "POST",
+            headers: {
+                "Authorization": `Bearer ${COHERE_API_KEY}`,
+                "Content-Type": "application/json",
+                "Accept": "application/json"
+            },
+            body: JSON.stringify(coherePayload)
+        });
+
+        if (!cohereResponse.ok) {
+            const errorData = await cohereResponse.text();
+            console.error("Erro na API da Cohere IDE:", errorData);
+            return res.status(500).json({ error: "Falha ao processar código na IA." });
+        }
+
+        const data = await cohereResponse.json();
+        
+        // Retornamos exatamente a chave que o Front-end novo espera
+        res.json({ text: data.text });
+        
+    } catch (err) {
+        console.error("Erro interno IDE:", err);
+        res.status(500).json({ error: "Falha no servidor de IA." });
+    }
+});
+
 // =============================
-// ROTA VOZ (MANTIDA ORIGINAL)
+// ROTA VOZ
 // =============================
 app.post("/api/voice", async (req, res) => {
     const { text } = req.body;
-
     if (!text) return res.status(400).json({ error: "Texto não fornecido." });
 
     try {
@@ -88,130 +122,89 @@ app.post("/api/voice", async (req, res) => {
         res.setHeader("Content-Type", "audio/mpeg");
         res.send(Buffer.from(audioBuffer));
     } catch (err) {
-        console.error("Erro voz:", err);
         res.status(500).json({ error: "Erro ao processar voz." });
     }
 });
 
 // =============================
-// ROTA GERAÇÃO DE IMAGEM (HUGGING FACE - Stable Diffusion)
+// ROTA GERAÇÃO DE IMAGEM
 // =============================
 app.post("/api/generate-image", async (req, res) => {
     const { prompt } = req.body;
-
-    if (!prompt) return res.status(400).json({ error: "Prompt da imagem não fornecido." });
+    if (!prompt) return res.status(400).json({ error: "Prompt não fornecido." });
 
     try {
-        if (!HF_TOKEN) return res.status(500).json({ error: "Chave do Hugging Face ausente na Vercel." });
+        if (!HF_TOKEN) return res.status(500).json({ error: "Chave HF ausente." });
 
         const response = await fetch("https://api-inference.huggingface.co/models/stabilityai/stable-diffusion-xl-base-1.0", {
             method: "POST",
-            headers: {
-                "Authorization": `Bearer ${HF_TOKEN}`,
-                "Content-Type": "application/json"
-            },
+            headers: { "Authorization": `Bearer ${HF_TOKEN}`, "Content-Type": "application/json" },
             body: JSON.stringify({ inputs: prompt })
         });
 
-        if (!response.ok) throw new Error("Falha ao gerar imagem na Hugging Face.");
+        if (!response.ok) throw new Error("Falha na HF.");
         
         const arrayBuffer = await response.arrayBuffer();
-        const buffer = Buffer.from(arrayBuffer);
-        const base64Image = buffer.toString('base64');
-
-        res.json({
-            predictions: [
-                { bytesBase64Encoded: base64Image }
-            ]
-        });
-        
+        res.json({ predictions: [{ bytesBase64Encoded: Buffer.from(arrayBuffer).toString('base64') }] });
     } catch (err) {
-        console.error("Erro ao gerar imagem:", err);
         res.status(500).json({ error: "Falha na geração de imagem." });
     }
 });
 
-
-
 // ===============================================
-// ROTA TRANSCRIÇÃO (HUGGING FACE - Whisper Large V3)
+// ROTA TRANSCRIÇÃO
 // ===============================================
 app.post("/api/transcribe", upload.single('file'), async (req, res) => {
-    if (!req.file) return res.status(400).json({ error: "Nenhum ficheiro multimédia enviado." });
+    if (!req.file) return res.status(400).json({ error: "Nenhum ficheiro enviado." });
 
     try {
-        if (!HF_TOKEN) return res.status(500).json({ error: "Chave do Hugging Face ausente na Vercel." });
+        if (!HF_TOKEN) return res.status(500).json({ error: "Chave HF ausente." });
 
         const response = await fetch("https://api-inference.huggingface.co/models/openai/whisper-large-v3", {
             method: "POST",
-            headers: {
-                "Authorization": `Bearer ${HF_TOKEN}`,
-                "Content-Type": req.file.mimetype // <-- CORREÇÃO 1: Dizer à HF que é um ficheiro de áudio
-            },
+            headers: { "Authorization": `Bearer ${HF_TOKEN}`, "Content-Type": req.file.mimetype },
             body: req.file.buffer 
         });
 
         if (!response.ok) {
             const errData = await response.json().catch(() => ({}));
-            
-            // <-- CORREÇÃO 2: Se a IA estiver a acordar, avisa o frontend para tentar novamente
-            if (errData.estimated_time) {
-                return res.status(503).json({ 
-                    error: `A IA de áudio está a iniciar. Tente novamente em ${Math.round(errData.estimated_time)} segundos.`,
-                    estimated_time: errData.estimated_time
-                });
-            }
-            throw new Error(errData.error || "Falha na API da Hugging Face.");
+            if (errData.estimated_time) return res.status(503).json({ error: `IA a iniciar. Tente em ${Math.round(errData.estimated_time)}s.`, estimated_time: errData.estimated_time });
+            throw new Error(errData.error || "Falha HF.");
         }
 
         const data = await response.json();
         res.json({ text: data.text });
-
     } catch (err) {
-        console.error("Erro na transcrição:", err.message);
-        // Devolve o erro exato para sabermos o que falhou
-        res.status(500).json({ error: err.message || "Erro interno ao processar o ficheiro multimédia." });
+        res.status(500).json({ error: err.message || "Erro interno." });
     }
 });
 
-
 // ===============================================
-// ROTA DE GERAÇÃO DE VÍDEO (EXPERIMENTAL)
+// ROTA DE GERAÇÃO DE VÍDEO
 // ===============================================
 app.post("/api/generate-video", async (req, res) => {
     const { prompt } = req.body;
-
-    if (!prompt) return res.status(400).json({ error: "Prompt do vídeo não fornecido." });
+    if (!prompt) return res.status(400).json({ error: "Prompt não fornecido." });
 
     try {
-        if (!HF_TOKEN) return res.status(500).json({ error: "Chave do Hugging Face ausente na Vercel." });
+        if (!HF_TOKEN) return res.status(500).json({ error: "Chave HF ausente." });
 
         const response = await fetch("https://api-inference.huggingface.co/models/damo-vilab/text-to-video-ms-1.7b", {
             method: "POST",
-            headers: {
-                "Authorization": `Bearer ${HF_TOKEN}`,
-                "Content-Type": "application/json"
-            },
+            headers: { "Authorization": `Bearer ${HF_TOKEN}`, "Content-Type": "application/json" },
             body: JSON.stringify({ inputs: prompt })
         });
 
         if (!response.ok) {
             const err = await response.json();
-            if (err.estimated_time) {
-                return res.status(503).json({ error: `O modelo de vídeo está ligando. Tente novamente em ${Math.round(err.estimated_time)} segundos.` });
-            }
+            if (err.estimated_time) return res.status(503).json({ error: `Modelo a ligar. Tente em ${Math.round(err.estimated_time)}s.` });
             throw new Error("Falha ao gerar vídeo.");
         }
         
         const arrayBuffer = await response.arrayBuffer();
-        const buffer = Buffer.from(arrayBuffer);
-        const base64Video = buffer.toString('base64');
-
-        res.json({ videoBase64: base64Video });
-        
+        res.json({ videoBase64: Buffer.from(arrayBuffer).toString('base64') });
     } catch (err) {
-        console.error("Erro ao gerar vídeo:", err);
-        res.status(500).json({ error: "Falha na geração de vídeo. Pode ser limite de tempo da Vercel." });
+        res.status(500).json({ error: "Falha na geração de vídeo." });
     }
 });
 
