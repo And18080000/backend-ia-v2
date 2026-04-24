@@ -25,7 +25,7 @@ app.get("/", (req, res) => {
 });
 
 // =============================
-// ROTA CHAT BÁSICO (MANTIDA)
+// ROTA CHAT BÁSICO
 // =============================
 app.post("/api/chat", async (req, res) => {
     const { message } = req.body;
@@ -41,7 +41,10 @@ app.post("/api/chat", async (req, res) => {
                 "Content-Type": "application/json",
                 "Accept": "application/json"
             },
-            body: JSON.stringify({ message })
+            body: JSON.stringify({ 
+                model: "command-r-plus", 
+                message 
+            })
         });
 
         if (!cohereResponse.ok) throw new Error("Falha na API da Cohere");
@@ -64,12 +67,12 @@ app.post("/api/ide-chat", async (req, res) => {
     try {
         if (!COHERE_API_KEY) return res.status(500).json({ error: "Chave da Cohere não configurada no servidor Vercel." });
 
-        // Cohere usa 'preamble' para as instruções de sistema e um histórico específico
         const coherePayload = {
+            model: "command-r-plus",
             message: message,
             preamble: systemInstruction || "Você é um assistente de IA.",
             chat_history: history || [],
-            temperature: 0.1 // Temperatura baixa para programação precisa e sem erros
+            temperature: 0.1
         };
 
         const cohereResponse = await fetch("https://api.cohere.ai/v1/chat", {
@@ -85,17 +88,15 @@ app.post("/api/ide-chat", async (req, res) => {
         if (!cohereResponse.ok) {
             const errorData = await cohereResponse.text();
             console.error("Erro na API da Cohere IDE:", errorData);
-            return res.status(500).json({ error: "Falha ao processar código na IA." });
+            return res.status(cohereResponse.status).json({ error: `Erro Cohere: ${errorData}` });
         }
 
         const data = await cohereResponse.json();
-        
-        // Retornamos exatamente a chave que o Front-end novo espera
         res.json({ text: data.text });
         
     } catch (err) {
         console.error("Erro interno IDE:", err);
-        res.status(500).json({ error: "Falha no servidor de IA." });
+        res.status(500).json({ error: err.message || "Falha no servidor de IA." });
     }
 });
 
