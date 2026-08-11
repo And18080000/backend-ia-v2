@@ -42,17 +42,22 @@ app.post("/api/chat", async (req, res) => {
                 "Accept": "application/json"
             },
             body: JSON.stringify({ 
-                model: "command-r-plus", 
+                model: "command-r-plus-08-2024", // Atualizado para o modelo ativo
                 message 
             })
         });
 
-        if (!cohereResponse.ok) throw new Error("Falha na API da Cohere");
+        if (!cohereResponse.ok) {
+            const errorData = await cohereResponse.text();
+            throw new Error(`Falha na API da Cohere: ${errorData}`);
+        }
+        
         const data = await cohereResponse.json();
         res.json({ reply: data.text });
         
     } catch (err) {
-        res.status(500).json({ error: "Falha no servidor." });
+        console.error("Erro no chat:", err);
+        res.status(500).json({ error: err.message || "Falha no servidor." });
     }
 });
 
@@ -68,7 +73,7 @@ app.post("/api/ide-chat", async (req, res) => {
         if (!COHERE_API_KEY) return res.status(500).json({ error: "Chave da Cohere não configurada no servidor Vercel." });
 
         const coherePayload = {
-            model: "command-r-plus",
+            model: "command-r-plus-08-2024", // Atualizado para o modelo ativo
             message: message,
             preamble: systemInstruction || "Você é um assistente de IA.",
             chat_history: history || [],
