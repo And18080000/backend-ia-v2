@@ -218,6 +218,103 @@ app.post("/api/generate-video", async (req, res) => {
     }
 });
 
+// =========================================================
+// ROTA OAUTH INSTAGRAM (META API) - CONEXÃO SEGURA
+// =========================================================
+
+// 1. Inicia o fluxo de login
+app.get("/api/instagram/auth", async (req, res) => {
+    const clientId = req.query.client_id;
+    
+    const META_APP_ID = process.env.META_APP_ID;
+    const META_USER_TOKEN = process.env.META_USER_TOKEN;
+    const REDIRECT_URI = process.env.META_REDIRECT_URI || `https://${req.get('host')}/api/instagram/callback`;
+
+    // Se o User Token gigante estiver no Vercel, ativamos o "Fast Track" sem abrir a tela do Facebook.
+    if (META_USER_TOKEN) {
+        return res.redirect(`${REDIRECT_URI}?code=uso_direto_token&state=${clientId}`);
+    }
+
+    if (!META_APP_ID) {
+        return res.send(`<html><body style="font-family: sans-serif; text-align: center; padding: 40px; color: white; background: #0a0a0a;"><h3>Erro: Variáveis da Meta não configuradas no Vercel.</h3><p>Configure META_APP_ID, META_APP_SECRET e META_USER_TOKEN.</p></body></html>`);
+    }
+
+    // Fluxo oficial caso o META_USER_TOKEN não esteja presente
+    const scope = "instagram_basic,pages_show_list,pages_read_engagement";
+    const authUrl = `https://www.facebook.com/v19.0/dialog/oauth?client_id=${META_APP_ID}&redirect_uri=${REDIRECT_URI}&scope=${scope}&state=${clientId}`;
+    
+    res.redirect(authUrl);
+});
+
+// 2. Callback do Facebook após o usuário autorizar
+app.get("/api/instagram/callback", async (req, res) => {
+    const code = req.query.code;
+    const clientId = req.query.state; 
+    
+    const META_APP_ID = process.env.META_APP_ID;
+    const META_APP_SECRET = process.env.META_APP_SECRET;
+    const META_USER_TOKEN = process.env.META_USER_TOKEN;
+    const REDIRECT_URI = process.env.META_REDIRECT_URI || `https://${req.get('host')}/api/instagram/callback`;
+
+    try {
+        let userAccessToken = "";
+
+        if (code === 'uso_direto_token' && META_USER_TOKEN) {
+            userAccessToken = META_USER_TOKEN; // Usa a chave do Vercel diretamente
+        } else {
+            // Troca o código pelo token de acesso real do usuário
+            const tokenRes = await fetch(`https://graph.facebook.com/v19.0/oauth/access_token?client_id=${META_APP_ID}&redirect_uri=${REDIRECT_URI}&client_secret=${META_APP_SECRET}&code=${code}`);
+            const tokenData = await tokenRes.json();
+            if (tokenData.error) throw new Error(tokenData.error.message);
+            userAccessToken = tokenData.access_token;
+        }
+
+        // Busca as páginas do Facebook que o usuário administra
+        const pagesRes = await fetch(`https://graph.facebook.com/v19.0/me/accounts?access_token=${userAccessToken}`);
+        const pagesData = await pagesRes.json();
+        if (!pagesData.data || pagesData.data.length === 0) throw new Error("Nenhuma página de Facebook (Fanpage) vinculada foi encontrada nesta conta.");
+
+        // Procura qual página está vinculada a um Instagram Profissional/Business
+        let igAccountId = null;
+        for (const page of pagesData.data) {
+            const igRes = await fetch(`https://graph.facebook.com/v19.0/${page.id}?fields=instagram_business_account&access_token=${userAccessToken}`);
+            const igPageData = await igRes.json();
+            if (igPageData.instagram_business_account) {
+                igAccountId = igPageData.instagram_business_account.id;
+                break;
+            }
+        }
+        
+        if (!igAccountId) throw new Error("Nenhum Instagram Profissional está vinculado à sua página do Facebook.");
+
+        // Busca os dados reais do perfil do Instagram
+        const profileRes = await fetch(`https://graph.facebook.com/v19.0/${igAccountId}?fields=name,username,profile_picture_url,followers_count,follows_count,media_count&access_token=${userAccessToken}`);
+        const igData = await profileRes.json();
+
+        // Retorna o script que envia apenas os dados INOFENSIVOS de volta para a tela do Sistema IA.
+        // O Token poderoso fica retido de forma segura e não é exposto.
+        res.send(`
+            <html>
+                <body style="background: #0a0a0a; color: white;">
+                    <h3 style="font-family: sans-serif; text-align: center; margin-top: 50px;">Conexão Bem Sucedida! Sincronizando...</h3>
+                    <script>
+                        window.opener.postMessage({
+                            type: 'IG_OAUTH_SUCCESS',
+                            clientId: '${clientId}',
+                            igData: ${JSON.stringify(igData)}
+                        }, '*');
+                        
+                        setTimeout(() => window.close(), 1000);
+                    </script>
+                </body>
+            </html>
+        `);
+    } catch (error) {
+        console.error("Erro no fluxo do Instagram:", error);
+        res.send(`<html><body style="font-family: sans-serif; text-align: center; margin-top: 50px; background: #0a0a0a; color: #ef4444;"><h3>Falha na Conexão:</h3><p>${error.message}</p></body></html>`);
+    }
+});
+
 module.exports = app;
 
 if (require.main === module) {
